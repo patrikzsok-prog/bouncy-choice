@@ -1,0 +1,125 @@
+
+name: Package BouncyChoice macOS DMG (prebuilt)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package-mac:
+    runs-on: macos-15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download macOS build input
+        shell: bash
+        env:
+          GH_REPOSITORY: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p build/input
+
+          gh release download v1.0.0 \
+            --repo "$GH_REPOSITORY" \
+            --pattern "BouncyChoice-macOS-build-input.zip" \
+            --dir build
+
+          python3 - <<'PY'
+          from pathlib import Path, PurePosixPath
+          from shutil import copyfileobj
+          from zipfile import ZipFile
+
+          archive_path = Path("build/BouncyChoice-macOS-build-input.zip")
+          output_dir = Path("build/input")
+
+          with ZipFile(archive_path) as archive:
+              for entry in archive.infolist():
+                  normalized = entry.filename.replace("\\", "/")
+                  path = PurePosixPath(normalized)
+
+                  if path.is_absolute() or ".." in path.parts:
+                      raise ValueError(f"Unsafe ZIP path: {entry.filename}")
+
+                  destination = output_dir.joinpath(*path.parts)
+
+                  if entry.is_dir() or normalized.endswith("/"):
+                      destination.mkdir(parents=True, exist_ok=True)
+                  else:
+                      destination.parent.mkdir(parents=True, exist_ok=True)
+
+                      with archive.open(entry) as source:
+                          with destination.open("wb") as target:
+                              copyfileobj(source, target)
+          PY
+
+          test -f build/input/publish/BouncyChoice
+          test -f build/input/Info.plist
+
+          plutil -lint build/input/Info.plist
+
+          echo "macOS build input extracted!"
+
+      - name: Create BouncyChoice.app
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APP="build/BouncyChoice.app"
+
+          mkdir -p "$APP/Contents/MacOS"
+          mkdir -p "$APP/Contents/Resources"
+
+          cp -R build/input/publish/. "$APP/Contents/MacOS/"
+          cp build/input/Info.plist "$APP/Contents/Info.plist"
+
+          chmod +x "$APP/Contents/MacOS/BouncyChoice"
+
+          echo "Checking executable architecture..."
+          file "$APP/Contents/MacOS/BouncyChoice"
+
+          echo "Checking Info.plist..."
+          plutil -lint "$APP/Contents/Info.plist"
+
+          echo "Applying ad-hoc code signature..."
+          codesign --force --deep --sign - "$APP"
+
+          codesign --verify --deep "$APP"
+
+          echo "BouncyChoice.app created!"
+
+      - name: Create macOS DMG
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p build/dmg-content
+          mkdir -p build/output
+
+          ditto \
+            build/BouncyChoice.app \
+            build/dmg-content/BouncyChoice.app
+
+          ln -s /Applications build/dmg-content/Applications
+
+          hdiutil create \
+            -volname "BouncyChoice" \
+            -srcfolder build/dmg-content \
+            -format UDZO \
+            -ov \
+            build/output/BouncyChoice-v1.0.0-macOS-AppleSilicon.dmg
+
+          echo "DMG created!"
+
+      - name: Upload macOS DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: BouncyChoice-macOS-AppleSilicon-DMG
+          path: build/output/*.dmg
+          if-no-files-found: error
+          retention-days: 30
