@@ -81,8 +81,7 @@ jobs:
 
           lipo -archs build/input/publish/BouncyChoice
 
-          lipo -verify_arch x86_64 \
-            build/input/publish/BouncyChoice
+          lipo build/input/publish/BouncyChoice -verify_arch x86_64
 
           echo "Intel x86_64 architecture verified!"
 
